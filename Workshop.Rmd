@@ -1,0 +1,424 @@
+---
+title: "Laforest-Lapointe Lab Meeting"
+output: html_document
+date: "March 13th & 20th 2023"
+author: "Sophie Boutin"
+
+---
+
+## R MICROBIOME DATA ANALYSIS WORKSHOP {.tabset}
+
+### Get ready
+
+#### **Download data**
+Download and save these data sets in a new folder.
+
+```{r echo=FALSE}
+
+# Metadata
+xfun::embed_file("MetaFlower.txt")
+```
+
+```{r echo=FALSE}
+# ASV Table
+xfun::embed_file("ASVFlower.csv")
+```
+
+```{r echo=FALSE}
+# Taxonomy Table
+xfun::embed_file("TaxonomyFlower.csv")
+```
+
+#### **Set Working Directory** 
+The working directory corresponds to the path where you saved the data.
+```{r}
+
+setwd("C:/Users/user/OneDrive/Bureau/Sherbrooke/r-novice-inflammation/directory/H23_MicrobiomeWorkshop_SB")
+```
+
+#### **Packages to load**
+The script will require the following packages: 
+```{r message=FALSE}
+#PHYLOSEQ
+#if (!require("BiocManager", quietly = TRUE))
+#install.packages("BiocManager")
+#to_install<-c("biomformat", "picante","ggplot2","Hmisc", "vegan", "phyloseq","DESeq2","tidyr" )
+#BiocManager::install(to_install)
+library("phyloseq")
+library("Biostrings")
+library("ggplot2")
+#install.packages("devtools")
+#devtools::install_github("thomasp85/patchwork")
+library("patchwork")
+library("vegan")
+library("dplyr")
+library("rstatix")
+library("ggpubr")
+```
+They can also be installed and loaded simultaneously using pacman
+```{r message=FALSE}
+#install.packages("pacman")
+library(pacman)
+p_load(phyloseq, Biostrings, ggplot2, patchwork, vegan, dplyr, rstatix, ggpubr, magrittr)
+```
+
+
+#### **Import data**
+We will work with 3 data sets (META, ASV, and TAXONOMY)  
+Can you explain the link between these 3 tables ?
+```{r}
+# Import metadata
+META <- read.table("MetaFlower.txt", header = T)
+META$site <- as.factor(META$site)
+META$cultivar <- as.factor(META$cultivar)
+# Import ASV table
+ASV <- read.csv("ASVFlower.csv")
+# Import taxonomy table
+TAXONOMY <- read.csv("TaxonomyFlower.csv")
+```
+
+##### **Verify that all dimensions are correct**
+```{r results='hold'}
+dim(META) # 45 samples and 5 variables
+dim(ASV) # 45 samples and 8772 ASV
+dim(TAXONOMY) # 8771 ASV and 8 taxonomic ranks
+```
+
+Issues:
+There should only be 7 taxonomic ranks !  
+The number of ASV do not match !  
+
+Let's verify what is wrong.
+```{r}
+head(TAXONOMY,2) # The first column (X) corresponds to the sample name
+TAXONOMY <- read.csv("TaxonomyFlower.csv", row.names = 1) # Specify that first column are row names
+head(TAXONOMY,2)
+dim(TAXONOMY)
+```
+
+```{r results='hide'}
+head(ASV,2) # The first column (X) corresponds to the sample name
+```
+
+```{r}
+ASV <- read.csv("ASVFlower.csv", row.names = 1) # Specify that first column are row names
+dim(ASV) # 45 samples and 8771 ASV
+head(ASV,2)
+
+row.names(META)==row.names(ASV)
+which(colnames(ASV)!=row.names(TAXONOMY))
+
+```
+
+### Phyloseq
+
+Lots of fun phyloseq tutorials here : https://joey711.github.io/phyloseq/import-data.html 
+
+#### **Create Phyloseq Object**
+This will merge META, ASV, and TAXONOMY within one object.
+```{r}
+# Create phyloseq object
+
+#phylo <- phyloseq(otu_table(ASV, taxa_are_rows = FALSE), 
+#               sample_data(META), 
+#               tax_table(TAXONOMY)) 
+
+# Error message: Taxonomy table should be a matrix
+
+TAXONOMY <- as.matrix(TAXONOMY) # Transform TAXONOMY dataframe into a matrix
+
+# Second try
+phylo <- phyloseq(otu_table(ASV, taxa_are_rows = FALSE), 
+               sample_data(META), 
+               tax_table(TAXONOMY)) 
+
+
+# Verify that the dimensions of each object within the phyloseq object match
+phylo # Yes they do
+```
+### PCoA
+
+#### **Variance Stabilizing**
+```{r message=FALSE}
+# PHYLOSEQ VARIANCE STABILIZING TRANSFORMATION WITH BLIND TRANSFORMATION
+phylo.dds<-phyloseq_to_deseq2(phylo,~site) #variable qui controle pour la variance
+head(phylo.dds)
+
+# Create function for computation (taken from online website of phyloseq)
+# Geometric mean is less affected by the high number of 0
+gm_mean <- function(x, na.rm=TRUE){exp(sum(log(x[x > 0]), na.rm=na.rm) / length(x))}
+
+# Estimate factor size
+phylo.dds = estimateSizeFactors(phylo.dds, geoMeans = apply(counts(phylo.dds), 1, gm_mean))
+head(phylo.dds,3)
+
+# Blind version for all treatments
+phylo.blind <- DESeq2::varianceStabilizingTransformation(phylo.dds, blind=T)
+head(phylo.blind)
+phylo.mat <- SummarizedExperiment::assay(phylo.blind) # Extract transformed asv table
+head(phylo.mat)
+dim(phylo.mat)
+phylo.mat<-t(phylo.mat)
+?t
+phylo.mat[which(phylo.mat<0)]<-0
+```
+
+#### **Ordination**
+```{r results='hold'}
+# Prepare for ordination for all treatments
+comm.phylo.mat <- vegdist(phylo.mat , "bray")
+head(comm.phylo.mat)
+PCoA.comm.phylo.mat<-capscale(phylo.mat~1,distance="bray")
+head(PCoA.comm.phylo.mat)
+
+PCoA.comm.phylo.mat$CA
+
+PCoA.comm.phylo.mat$CA$eig[1:3]/sum(PCoA.comm.phylo.mat$CA$eig)
+eig <- PCoA.comm.phylo.mat$CA$eig
+eig[1]/sum(abs(eig)) # 18.03 %
+eig[2]/sum(abs(eig)) # 9.03 %
+eig[3]/sum(abs(eig)) # 6.57 %
+PCoA.phylo<- PCoA.comm.phylo.mat # New shorter name
+head(PCoA.phylo)
+```
+
+#### **Extract PCoA Scores**
+```{r}
+#head(scores(PCoA.phylo)$species)
+head(scores(PCoA.phylo)$site)     # Site here does not correspond to our site (ASB, PMB, VBS). In a PCoA the "sites" correspond to the observations, thus the samples.
+
+# Assign PCoA scores of each samples as column in the meta datafrmae
+META$MDS1 <- scores(PCoA.phylo)$site[,1] # MDS1
+META$MDS2 <- scores(PCoA.phylo)$site[,2] # MDS2
+head(META)
+```
+
+#### **Plot Ordination**
+Let's see what the PCoA looks like:
+```{r warning=FALSE}
+png("flower.PCoA.png", width = 450, height = 350, units = "px")
+
+plot.pcoa <- ggplot(META, aes(MDS1, MDS2,shape=cultivar, fill=site, color=site))+ # What we want to plot
+  stat_ellipse(level=0.95, geom = "polygon",alpha = 1/6, aes(group = site, fill = site))+ # 95% confidence interval ellipse
+  scale_color_manual(name = "Vergers", values= c("black","black","black"))+ # Points border color
+  scale_shape_manual(name = "Cultivars", values = c(22,21,24))+ # Points shape
+  scale_fill_manual(name = "Vergers",values = c("#00AFBB", "#E7B800", "#FC4E07"))+ # Points fill color
+   theme_bw()+ # General style of the plot (black & white)
+  ggtitle("Analyse en coordonnées principales (PCoA) \n des communautés bactériennes des fleurs") + # Title
+  theme(plot.title = element_text(hjust = 0.5, face="bold"),axis.title = element_text(size = 16))+ # Title and axis text
+  xlab("PCo1 (18 %)")+ # Modify xlab name
+  ylab("PCo2 (9 %)")+ # Modify ylab name
+geom_point(aes(size=0.1))+ # Points size
+  guides(size = "none"); plot.pcoa ## Do not show points size legend
+
+dev.off()
+```
+
+
+#### **Permanova**
+
+Visually, samples from different sites (orchards) seem to have different community structure. But we need to test whether these observations are true or not.  
+
+Before we do a PERMANOVA test, we will test for homogeneity of variance across groups.
+
+Reference: https://rfunctions.blogspot.com/2019/03/betadisper-and-adonis-homogeneity-of.html
+
+Betadisper tests whether two or more groups are homogeneously dispersed in relation to their species in studied samples. This test can be done to see if one group has more compositional variance than another. Moreover, homogeneity of dispersion among groups is very advisable to have if you want to test if two or more groups have different compositions, which is tested by adonis.
+
+##### **Test for homogeneity of variance across groups**
+```{r}
+# SITES
+disp.site<-betadisper(comm.phylo.mat, META$site, type ="centroid")
+
+anova(disp.site)
+permutest(disp.site, control = permControl(nperm = 999)) # Sites have homogeneous variances
+plot(TukeyHSD(disp.site))
+plot(disp.site,main = "")
+
+# CULTIVARS
+disp.cultivar<-betadisper(comm.phylo.mat, META$cultivar, type ="centroid")
+
+anova(disp.cultivar)
+permutest(disp.cultivar, control = permControl(nperm = 999)) # Cultivars do NOT have homogeneous variances
+plot(TukeyHSD(disp.cultivar))
+typeof(disp.cultivar)
+plot(disp.cultivar,main="")
+```
+    
+Conclusion:  
+If the Permanova indicates that **sites** have different compositions, it's not caused by the fact that they have different variances.
+If the Permanova indicates that **cultivars** have different compositions, we won't be able to tell if it's true or if it's only caused by the fact that they have different variances.
+
+##### **Test if compositions are different**
+```{r}
+permanova.test<-adonis2(phylo.mat ~ site*cultivar, by="terms",data=META); permanova.test 
+permanova.test<-adonis2(phylo.mat ~ cultivar*site, by="terms",data=META); permanova.test 
+
+permanova.test<-adonis2(phylo.mat ~ site*cultivar, by="margin",data=META); permanova.test 
+permanova.test<-adonis2(phylo.mat ~ site+cultivar, by="margin",data=META); permanova.test 
+# Yes compositions are different
+# By terms --> order mentioned matters
+```
+
+### Diversity
+
+#### **Rarefaction**
+We rarefy so that every sample have the same number of sequence. We will rarefy to the sample having the smallest number of sequence.  
+"Rarefaction is a method that adjusts for differences in library sizes across samples to aid comparisons of alpha diversity."  
+https://www.frontiersin.org/articles/10.3389/fmicb.2019.02407/full 
+
+```{r}
+min(sample_sums(phylo)) # Minimum number of sequence/sample is 7086
+phylo.rare <- rarefy_even_depth(phylo, sample.size = 7000) # Rarefy to 7000 sequences
+```
+#### **Calculate Alpha Diversity**
+```{r}
+alpha.div <- estimate_richness(phylo.rare)
+alpha.div# Calculate many alpha diversity index
+META$alphadiv<-alpha.div$Shannon # Bind the Shannon index into the metadata
+META
+```
+
+#### **Test if groups have different diversity**
+```{r}
+META %>%
+  group_by(site) %>%
+  shapiro_test (alphadiv) # NOT NORMAL
+
+META %>%
+  group_by(site) %>%
+  kruskal_test (alphadiv ~ cultivar) # SOME GROUPS ARE DIFFERENT IN VBS
+
+stat.diversity <- META %>%
+  group_by(site) %>%
+  dunn_test (alphadiv ~ cultivar);stat.diversity # HERE WE SHOW WHICH GROUPS ARE DIFFERENT (Cortland-Liberty and Paulared-Liberty)
+```
+
+#### **Plot Diversity**
+```{r}
+#png("flower.diversity.png", width = 800, height = 500, units = "px")
+
+plot.diversity <- plot_richness(phylo, x = "cultivar", measures=c("Shannon"))+ # What we want to plot
+  theme_bw()+ # General style of the plot (black & white)
+  geom_boxplot(aes(fill = cultivar, alpha = 1/5)) + # Boxplot
+  scale_fill_manual(name = "Cultivars", values = c("#009E73", "#0072B2", "maroon2"))+ # Colors according to the cultivar
+  facet_grid(cols = vars(site))+ # Seperate the plot according to the site
+  guides(alpha = "none")+ # Hide legend
+  theme(legend.position="none")+ # Hide legend
+  theme(axis.title.x = element_blank())+ # Hide axis title
+  theme(axis.text = element_text(size = 14))+ # Axis text
+  theme(strip.text.x = element_text(size = 14))+ #Axis text
+  stat_pvalue_manual(stat.diversity,  label = "p.adj.signif", tip.length = 0.01, y.position = 5.3, step.group.by = "site", step.increase = 0.1, hide.ns = T);plot.diversity # Add stat test
+
+#dev.off()
+```
+Change the argument **hide.ns = F** to include the non significant results
+```{r}
+#png("flower.diversity.png", width = 800, height = 500, units = "px")
+
+plot.diversity <- plot_richness(phylo, x = "cultivar", measures=c("Shannon"))+ # What we want to plot
+  theme_bw()+ # General style of the plot (black & white)
+  geom_boxplot(aes(fill = cultivar, alpha = 1/5)) + # Boxplot
+  scale_fill_manual(name = "Cultivars", values = c("#009E73", "#0072B2", "maroon2"))+ # Colors according to the cultivar
+  facet_grid(cols = vars(site))+ # Seperate the plot according to the site
+  guides(alpha = "none")+ # Hide legend
+  theme(legend.position="none")+ # Hide legend
+  theme(axis.title.x = element_blank())+ # Hide axis title
+  theme(axis.text = element_text(size = 14))+ # Axis text
+  theme(strip.text.x = element_text(size = 14))+ #Axis text
+  stat_pvalue_manual(stat.diversity,  label = "p.adj.signif", tip.length = 0.01, y.position = 5.3, step.group.by = "site", step.increase = 0.1, hide.ns = F);plot.diversity # Add stat test
+
+#dev.off()
+```
+
+
+Conclusion:  
+Only the cultivar Liberty at VBS has different alpha diversity compared to Cortland and Paulared at the same site.
+
+### Composition
+
+#### **ASB**
+```{r}
+# ASB
+flower.asb <- subset_samples(phylo, site == "ASB")
+
+genus.flower.asb = tax_glom(flower.asb, taxrank = "Genus")
+genus.flower.asb
+N <- 10
+top.flower.asb <- names(sort(taxa_sums(genus.flower.asb), decreasing = TRUE))[1:N]
+
+genus.flower.asb.prop <- transform_sample_counts(genus.flower.asb, function(x) x / sum(x)/5 )
+genus.flower.asb.prop
+
+genus.flower.asb.prop.top <- prune_taxa(top.flower.asb, genus.flower.asb.prop)
+genus.flower.asb.prop.top
+
+
+tax_table(genus.flower.asb.prop.top)
+colnames(tax_table(genus.flower.asb))
+head(colnames(otu_table(genus.flower.asb)))
+rownames(otu_table(genus.flower.asb))
+
+#png("abun.flower.asb.png", width = 500, height = 350, units = "px")
+abun.flower.asb <- plot_bar(genus.flower.asb.prop.top, x = "cultivar", fill = "Genus")+
+  geom_bar(stat = "identity", position = "stack")+
+  theme_bw()+
+  scale_fill_manual(values = c ("dodgerblue4","darkgreen","#009392FF", "aquamarine", "#39B185FF", "#9CCB86FF","#E9E29CFF", "#E88471FF", "#CF597EFF","gray"))+
+  ggtitle("ASB");abun.flower.asb
+#dev.off()
+```
+
+#### **PMB**
+```{r}
+# PMB
+flower.pmb <- subset_samples(phylo, site == "PMB")
+flower.pmb
+genus.flower.pmb = tax_glom(flower.pmb, taxrank = "Genus")
+N <- 10
+top.flower.pmb <- names(sort(taxa_sums(genus.flower.pmb), decreasing = TRUE))[1:N]
+genus.flower.pmb.prop <- transform_sample_counts(genus.flower.pmb, function(x) x / sum(x)/5 )
+genus.flower.pmb.prop.top <- prune_taxa(top.flower.pmb, genus.flower.pmb.prop)
+
+#png("abun.flower.pmb.png", width = 500, height = 350, units = "px")
+abun.flower.pmb <- plot_bar(genus.flower.pmb.prop.top, x = "cultivar", fill = "Genus")+
+  geom_bar(stat = "identity", position = "stack")+
+  theme_bw()+
+  scale_fill_manual(values=c("dodgerblue4","blue3", "dodgerblue2", "#9CCB86FF", "#E9E29CFF", "#EEB479FF","#BF812DFF", "#E88471FF", "#CF597EFF","gray"))+
+  ggtitle("PMB");abun.flower.pmb
+#dev.off()
+```
+
+#### **VBS**
+```{r}
+# VBS
+flower.vbs <- subset_samples(phylo, site == "VBS")
+flower.vbs
+genus.flower.vbs = tax_glom(flower.vbs, taxrank = "Genus")
+N <- 10
+top.flower.vbs <- names(sort(taxa_sums(genus.flower.vbs), decreasing = TRUE))[1:N]
+genus.flower.vbs.prop <- transform_sample_counts(genus.flower.vbs, function(x) x / sum(x)/5 )
+genus.flower.vbs.prop.top <- prune_taxa(top.flower.vbs, genus.flower.vbs.prop)
+otu_table(genus.flower.vbs)
+
+#png("abun.flower.vbs.png", width = 500, height = 350, units = "px")
+abun.flower.vbs <- plot_bar(genus.flower.vbs.prop.top, x = "cultivar", fill = "Genus")+
+  geom_bar(stat = "identity", position = "stack")+
+  theme_bw()+
+  scale_fill_manual(values=c("#053061FF","dodgerblue4","#74ADD1FF","darkgreen","green", "#009392FF","aquamarine", "#9CCB86FF","#E9E29CFF", "#E88471FF"))+
+  ggtitle("VBS");abun.flower.vbs
+#dev.off()
+```
+
+#### **Merge all graph with Patchwork**
+
+Introduction to patchwork : https://patchwork.data-imaginist.com/articles/guides/annotation.html
+```{r}
+# Using the "patchwork" package
+abun.flower.asb+abun.flower.pmb+abun.flower.vbs +
+  plot_annotation(tag_levels = 'A')& 
+  theme(plot.tag = element_text(size = 20, face = "bold"))
+# Ok they look weird but the purpose was to introduce you to the patchwork package:)
+```
+
+
+
